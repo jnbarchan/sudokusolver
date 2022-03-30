@@ -32,7 +32,6 @@ MainWindow::MainWindow(QWidget *parent)
     solveMenu->addAction("St&ep", this, &MainWindow::actionSolveStep, QKeySequence(Qt::CTRL + Qt::Key_E));
 
     board = new BoardModel(this);
-    board->setData(board->index(1, 1), 9);
     boardView = new BoardView(this);
     boardView->setModel(board);
     connect(boardView, &BoardView::modelDataEdited, board, &BoardModel::modelDataEdited);
@@ -136,21 +135,39 @@ BoardModel::BoardModel(QObject *parent /*= nullptr*/)
     resetAllPossibilities();
 }
 
+///// STRUCT CellGroupIterator /////
+
+/*static*/ int BoardModel::CellGroupIterator::paramForDirection(BoardModel::CellGroupIteratorDirection direction, int row, int col)
+{
+    switch (direction)
+    {
+    case Row: return row;
+    case Column: return col;
+    case Square: return (row / 3) * 3 + (col / 3);
+    }
+    return -1;
+}
+
 BoardModel::CellGroupIterator::CellGroupIterator(CellGroupIteratorDirection direction, int param)
 {
     this->direction = direction;
-    row0 = col0 = 0;
+    row0 = col0 = groupIndex = 0;
     switch (direction)
     {
     case Row: row0 = param; break;
     case Column: col0 = param; break;
     case Square:
-        row0 = param / 3;
-        col0 = param % 3;
+        row0 = param / 3 * 3;
+        col0 = param % 3 * 3;
         break;
     }
     row = row0;
     col = col0;
+}
+
+BoardModel::CellGroupIterator::CellGroupIterator(CellGroupIteratorDirection direction, int row, int col)
+    : CellGroupIterator(direction, paramForDirection(direction, row, col))
+{
 }
 
 bool BoardModel::CellGroupIterator::atEnd() const
@@ -168,6 +185,7 @@ bool BoardModel::CellGroupIterator::next()
 {
     if (atEnd())
         return false;
+    groupIndex++;
     switch (direction)
     {
     case Row: col++; break;
@@ -205,24 +223,14 @@ void BoardModel::resetAllPossibilities()
 
 void BoardModel::reducePossibilities(int row, int col)
 {
-    int numHere = index(row, col).data().toInt();
-    if (numHere != 0)
-    {
-        for (int num = 1; num <= 9; num++)
-            setPossibility(row, col, num, false);
-    }
-    if (numHere != 0)
-    {
-        for (int row2 = 0; row2 < 9; row2++)
-            setPossibility(row2, col, numHere, false);
-        for (int col2 = 0; col2 < 9; col2++)
-            setPossibility(row, col2, numHere, false);
-        int square = (row / 3) * 3 + (col / 3);
-        int row0 = square / 3 * 3, col0 = square % 3 * 3;
-        for (int row2 = row0; row2 < row0 + 3; row2++)
-            for (int col2 = col0; col2 < col0 + 3; col2++)
-                setPossibility(row2, col2, numHere, false);
-    }
+    int numHere = numInCell(row, col);
+    if (numHere == 0)
+        return;
+    for (int num = 1; num <= 9; num++)
+        setPossibility(row, col, num, false);
+    for (CellGroupIteratorDirection direction : {Column, Row, Square})
+        for (CellGroupIterator cgit(direction, row, col); !cgit.atEnd(); cgit.next())
+            setPossibility(cgit.row, cgit.col, numHere, false);
 }
 
 void BoardModel::reduceAllPossibilities()
@@ -248,32 +256,29 @@ void BoardModel::clearBoard()
     endResetModel();
 }
 
+int BoardModel::numInCell(int row, int col) const
+{
+    return index(row, col).data().toInt();
+}
+
 bool BoardModel::isSolved() const
 {
     for (int row = 0; row < rowCount(); row++)
         for (int col = 0; col < columnCount(); col++)
-            if (index(row, col).data().toInt() == 0)
+            if (numInCell(row, col) == 0)
                 return false;
     return true;
 }
 
 bool BoardModel::numInCellHasDuplicate(int row, int col) const
 {
-    int num = index(row, col).data().toInt();
+    int num = numInCell(row, col);
     if (num == 0)
         return false;
-    for (int row2 = 0; row2 < 9; row2++)
-        if (row2 != row && index(row2, col).data().toInt() == num)
+    for (CellGroupIteratorDirection direction : {Column, Row, Square})
+        for (CellGroupIterator cgit(direction, row, col); !cgit.atEnd(); cgit.next())
+            if (!(cgit.row == row && cgit.col == col) && numInCell(cgit.row, cgit.col) == num)
                 return true;
-    for (int col2 = 0; col2 < 9; col2++)
-        if (col2 != col && index(row, col2).data().toInt() == num)
-                return true;
-    int square = (row / 3) * 3 + (col / 3);
-    int row0 = square / 3 * 3, col0 = square % 3 * 3;
-    for (int row2 = row0; row2 < row0 + 3; row2++)
-        for (int col2 = col0; col2 < col0 + 3; col2++)
-            if (row2 != row && col2 != col && index(row2, col2).data().toInt() == num)
-                    return true;
     return false;
 }
 
@@ -332,10 +337,7 @@ void BoardModel::saveBoard(QTextStream &ts) const
     for (int row = 0; row < rowCount(); row++)
     {
         for (int col = 0; col < columnCount(); col++)
-        {
-            int num = data(index(row, col)).toInt();
-            ts << num << " ";
-        }
+            ts << numInCell(row, col) << " ";
         ts << endl;
     }
 }
@@ -349,7 +351,7 @@ void BoardModel::solveStart()
 bool BoardModel::solveCellHasOnePossibility(int row, int col, int &num) const
 {
     num = 0;
-    if (index(row, col).data().toInt() != 0)
+    if (numInCell(row, col) != 0)
         return false;
     int found = 0;
     for (int num1 = 1; num1 <= 9; num1++)
@@ -365,96 +367,47 @@ bool BoardModel::solveCellHasOnePossibility(int row, int col, int &num) const
 CellNum BoardModel::solveFindStepPass1() const
 {
     // find if there is a cell which has just 1 possibility available
+    int num;
     for (int row = 0; row < 9; row++)
         for (int col = 0; col < 9; col++)
-        {
-            int num = index(row, col).data().toInt();
-            if (num != 0)
-                continue;
             if (solveCellHasOnePossibility(row, col, num))
                 return CellNum(row, col, num);
-        }
     return CellNum();
 }
 
-CellNum BoardModel::cellGroupOnlyPossibilityForNum(int row, int col, int square) const
+CellNum BoardModel::cellGroupOnlyPossibilityForNum(CellGroupIteratorDirection direction, int param) const
 {
-    if (row >= 0)
-    {
-        for (int col1 = 0; col1 < 9; col1++)
-            if (index(row, col1).data().toInt() == 0)
-                for (int num = 1; num <= 9; num++)
-                    if (possibilities[row][col1][num])
-                    {
-                        int found = 0;
-                        for (int col2 = 0; col2 < 9; col2++)
-                            if (index(row, col2).data().toInt() == 0 && possibilities[row][col2][num])
-                                found++;
-                        if (found == 1)
-                            return CellNum(row, col1, num);
-                    }
-    }
-    else if (col >= 0)
-    {
-        for (int row1 = 0; row1 < 9; row1++)
-            if (index(row1, col).data().toInt() == 0)
-                for (int num = 1; num <= 9; num++)
-                    if (possibilities[row1][col][num])
-                    {
-                        int found = 0;
-                        for (int row2 = 0; row2 < 9; row2++)
-                            if (index(row2, col).data().toInt() == 0 && possibilities[row2][col][num])
-                                found++;
-                        if (found == 1)
-                            return CellNum(row1, col, num);
-                    }
-    }
-    else if (square >= 0)
-    {
-        int row0 = square / 3 * 3, col0 = square % 3 * 3;
-        for (int row1 = row0; row1 < row0 + 3; row1++)
-            for (int col1 = col0; col1 < col0 + 3; col1++)
-                if (index(row1, col).data().toInt() == 0)
-                    for (int num = 1; num <= 9; num++)
-                        if (possibilities[row1][col1][num])
-                        {
-                            int found = 0;
-                            for (int row2 = row0; row2 < row0 + 3; row2++)
-                                for (int col2 = col0; col2 < col0 + 3; col2++)
-                                    if (index(row2, col2).data().toInt() == 0 && possibilities[row2][col2][num])
-                                        found++;
-                            if (found == 1)
-                                return CellNum(row1, col1, num);
-                        }
-    }
-    else
-        Q_ASSERT(false);
+    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+        if (numInCell(cgit.row, cgit.col) == 0)
+            for (int num = 1; num <= 9; num++)
+                if (possibilities[cgit.row][cgit.col][num])
+                {
+                    int found = 0;
+                    for (CellGroupIterator cgit2(direction, param); !cgit2.atEnd(); cgit2.next())
+                        if (numInCell(cgit2.row, cgit2.col) == 0 && possibilities[cgit2.row][cgit2.col][num])
+                            found++;
+                    if (found == 1)
+                        return CellNum(cgit.row, cgit.col, num);
+                }
     return CellNum();
 }
 
 CellNum BoardModel::solveFindStepPass2() const
 {
-    //VERYTEMPORARY
-    return CellNum();
     // find if there is a "group" (row/column/square) of cells
     // where there is some possibility which is only available *once* in the group
     CellNum cellNum;
-    for (int row = 0; row < 9; row++)
-        if (!(cellNum = cellGroupOnlyPossibilityForNum(row, -1, -1)).isEmpty())
-            return cellNum;
-    for (int col = 0; col < 9; col++)
-        if (!(cellNum = cellGroupOnlyPossibilityForNum(-1, col, -1)).isEmpty())
-            return cellNum;
-    for (int square = 0; square < 9; square++)
-        if (!(cellNum = cellGroupOnlyPossibilityForNum(-1, -1, square)).isEmpty())
-            return cellNum;
+    for (CellGroupIteratorDirection direction : {Column, Row, Square})
+        for (int param = 0; param < 9; param++)
+            if (!(cellNum = cellGroupOnlyPossibilityForNum(direction, param)).isEmpty())
+                return cellNum;
     return CellNum();
 }
 
 QList<int> BoardModel::numPossibilitiesList(int row, int col) const
 {
     QList<int> nums;
-    if (index(row, col).data().toInt() != 0)
+    if (numInCell(row, col) != 0)
         return nums;
     for (int num = 1; num <= 9; num++)
         if (possibilities[row][col][num])
@@ -462,28 +415,11 @@ QList<int> BoardModel::numPossibilitiesList(int row, int col) const
     return nums;
 }
 
-QVector<QList<int> > BoardModel::solveCellGroupPossibilities(int row, int col, int square) const
+QVector<QList<int> > BoardModel::solveCellGroupPossibilities(CellGroupIteratorDirection direction, int param) const
 {
     QVector<QList<int> > groupVec(9);
-    if (row >= 0)
-    {
-        for (int col1 = 0; col1 < 9; col1++)
-            groupVec[col1] = numPossibilitiesList(row, col1);
-    }
-    else if (col >= 0)
-    {
-        for (int row1 = 0; row1 < 9; row1++)
-            groupVec[row1] = numPossibilitiesList(row1, col);
-    }
-    else if (square >= 0)
-    {
-        int row0 = square / 3 * 3, col0 = square % 3 * 3;
-        for (int i = 0, row1 = row0; row1 < row0 + 3; row1++)
-            for (int col1 = col0; col1 < col0 + 3; col1++, i++)
-                groupVec[i] = numPossibilitiesList(row1, col1);
-    }
-    else
-        Q_ASSERT(false);
+    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+        groupVec[cgit.groupIndex] = numPossibilitiesList(cgit.row, cgit.col);
     return groupVec;
 }
 
@@ -499,9 +435,9 @@ bool BoardModel::findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> 
     return false;
 }
 
-bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(int row, int col, int square)
+bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param)
 {
-    QVector<QList<int> > groupPossibilities(solveCellGroupPossibilities(row, col, square));
+    QVector<QList<int> > groupPossibilities(solveCellGroupPossibilities(direction, param));
     int cell1, cell2;
     if (!findCellGroupIndexesForIdenticalPairs(groupPossibilities, cell1, cell2))
         return false;
@@ -510,44 +446,14 @@ bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(int row, int col,
     int num1 = groupPossibilities[cell1][0], num2 = groupPossibilities[cell1][1];
     Q_ASSERT(num1 != num2);
     bool changed = false;
-    if (row >= 0)
-    {
-        for (CellGroupIterator cgit(Row, row); !cgit.atEnd(); cgit.next())
-//        for (int col1 = 0; col1 < 9; col1++)
-            if (cgit.col != cell1 && cgit.col != cell2)
+    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+        if (cgit.groupIndex != cell1 && cgit.groupIndex != cell2)
+            if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
             {
-                if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
-                    changed = true;
+                changed = true;
                 setPossibility(cgit.row, cgit.col, num1, false);
                 setPossibility(cgit.row, cgit.col, num2, false);
             }
-    }
-    else if (col >= 0)
-    {
-        for (int row1 = 0; row1 < 9; row1++)
-            if (row1 != cell1 && row1 != cell2)
-            {
-                if (possibilities[row1][col][num1] || possibilities[row1][col][num2])
-                    changed = true;
-                setPossibility(row1, col, num1, false);
-                setPossibility(row1, col, num2, false);
-            }
-    }
-    else if (square >= 0)
-    {
-        int row0 = square / 3 * 3, col0 = square % 3 * 3;
-        for (int i = 0, row1 = row0; row1 < row0 + 3; row1++)
-            for (int col1 = col0; col1 < col0 + 3; col1++, i++)
-                if (i != cell1 && i != cell2)
-                {
-                    if (possibilities[row1][col1][num1] || possibilities[row1][col1][num2])
-                        changed = true;
-                    setPossibility(row1, col1, num1, false);
-                    setPossibility(row1, col1, num2, false);
-                }
-    }
-    else
-        Q_ASSERT(false);
     return changed;
 }
 
@@ -560,15 +466,10 @@ CellNum BoardModel::solveFindStepPass3()
     do
     {
         changed = false;
-        for (int row = 0; row < 9; row++)
-            if (reduceCellGroupPossibilitiesForIdenticalPairs(row, -1, -1))
-                changed = true;
-        for (int col = 0; col < 9; col++)
-            if (reduceCellGroupPossibilitiesForIdenticalPairs(-1, col, -1))
-                changed = true;
-        for (int square = 0; square < 9; square++)
-            if (reduceCellGroupPossibilitiesForIdenticalPairs(-1, -1, square))
-                changed = true;
+        for (CellGroupIteratorDirection direction : {Column, Row, Square})
+            for (int param = 0; param < 9; param++)
+                if (reduceCellGroupPossibilitiesForIdenticalPairs(direction, param))
+                    changed = true;
         if (changed)
         {
             CellNum cellnum = solveFindStepPass1();

@@ -85,53 +85,13 @@ private:
         CellGroupIteratorDirection direction;
         int row0, col0;
         int row, col;
+        int groupIndex;
 
+        static int paramForDirection(CellGroupIteratorDirection direction, int row, int col);
         CellGroupIterator(CellGroupIteratorDirection direction, int param);
-//        {
-//            this->direction = direction;
-//            row0 = col0 = 0;
-//            switch (direction)
-//            {
-//            case Row: row0 = param; break;
-//            case Column: col0 = param; break;
-//            case Square:
-//                row0 = param / 3;
-//                col0 = param % 3;
-//                break;
-//            }
-//            row = row0;
-//            col = col0;
-//        }
-
+        CellGroupIterator(CellGroupIteratorDirection direction, int row, int col);
         bool atEnd() const;
-//        {
-//            switch (direction)
-//            {
-//            case Row: return (col >= 9);
-//            case Column: return (row >= 9);
-//            case Square: return (row >= row0 + 3 || (row == row0 + 2 && col >= col0 + 3));
-//            }
-//            return true;
-//        }
-
         bool next();
-//        {
-//            if (atEnd())
-//                return false;
-//            switch (direction)
-//            {
-//            case Row: col++; break;
-//            case Column: row++; break;
-//            case Square:
-//                if (++col >= col0 + 3)
-//                {
-//                    col = col0;
-//                    row++;
-//                }
-//                break;
-//            }
-//            return true;
-//        }
     };
 
     bool possibilities[9][9][10];
@@ -142,15 +102,16 @@ private:
     void reducePossibilities(int row, int col);
     void reduceAllPossibilities();
     void clearAllData();
+    int numInCell(int row, int col) const;
     bool numInCellHasDuplicate(int row, int col) const;
     bool solveCellHasOnePossibility(int row, int col, int &num) const;
     CellNum solveFindStepPass1() const;
-    CellNum cellGroupOnlyPossibilityForNum(int row, int col, int square) const;
+    CellNum cellGroupOnlyPossibilityForNum(CellGroupIteratorDirection direction, int param) const;
     CellNum solveFindStepPass2() const;
     QList<int> numPossibilitiesList(int row, int col) const;
-    QVector<QList<int> > solveCellGroupPossibilities(int row, int col, int square) const;
+    QVector<QList<int> > solveCellGroupPossibilities(CellGroupIteratorDirection direction, int param) const;
     bool findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> > &groupPossibilities, int &cell1, int &cell2) const;
-    bool reduceCellGroupPossibilitiesForIdenticalPairs(int row, int col, int square);
+    bool reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param);
     CellNum solveFindStepPass3();
     CellNum solveFindStep();
 
