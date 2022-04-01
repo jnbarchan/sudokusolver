@@ -348,7 +348,7 @@ void BoardModel::solveStart()
     reduceAllPossibilities();
 }
 
-bool BoardModel::solveCellHasOnePossibility(int row, int col, int &num) const
+bool BoardModel::cellHasOnePossibility(int row, int col, int &num) const
 {
     num = 0;
     if (numInCell(row, col) != 0)
@@ -370,7 +370,7 @@ CellNum BoardModel::solveFindStepPass1() const
     int num;
     for (int row = 0; row < 9; row++)
         for (int col = 0; col < 9; col++)
-            if (solveCellHasOnePossibility(row, col, num))
+            if (cellHasOnePossibility(row, col, num))
                 return CellNum(row, col, num);
     return CellNum();
 }
@@ -404,8 +404,9 @@ CellNum BoardModel::solveFindStepPass2() const
     return CellNum();
 }
 
-QList<int> BoardModel::numPossibilitiesList(int row, int col) const
+QList<int> BoardModel::numPossibilitiesListForCell(int row, int col) const
 {
+    // return a list of which numbers are possible in cell (row,col)
     QList<int> nums;
     if (numInCell(row, col) != 0)
         return nums;
@@ -415,16 +416,22 @@ QList<int> BoardModel::numPossibilitiesList(int row, int col) const
     return nums;
 }
 
-QVector<QList<int> > BoardModel::solveCellGroupPossibilities(CellGroupIteratorDirection direction, int param) const
+QVector<QList<int> > BoardModel::cellGroupPossibilitiesByIndex(CellGroupIteratorDirection direction, int param) const
 {
+    // return an array indexed by "group" element index
+    // where each array element is a list of which numbers are possible in the group element index
     QVector<QList<int> > groupVec(9);
     for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
-        groupVec[cgit.groupIndex] = numPossibilitiesList(cgit.row, cgit.col);
+        groupVec[cgit.groupIndex] = numPossibilitiesListForCell(cgit.row, cgit.col);
     return groupVec;
 }
 
 bool BoardModel::findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> > &groupPossibilities, int &cell1, int &cell2) const
 {
+    // return whether, by looking through the array of lists of possible numbers in each element of a group,
+    // there are any 2 elements which have just 2 possible numbers *and* those numbers are the same in both elements
+    // in that case, set `cell1` & `cell2` to the group indexes of the identical pair
+    Q_ASSERT(groupPossibilities.count() == 9);
     cell1 = cell2 = -1;
     for (cell1 = 0; cell1 < 9; cell1++)
         if (groupPossibilities[cell1].count() == 2)
@@ -437,14 +444,20 @@ bool BoardModel::findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> 
 
 bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param)
 {
-    QVector<QList<int> > groupPossibilities(solveCellGroupPossibilities(direction, param));
+    // if within a "group" we find 2 cells
+    // where each cell has just 2 possibilities *and* those numbers are the same in both cells
+    // we can go through all *other* cells in the group removing those 2 numbers from their possibles
+    QVector<QList<int> > groupPossibilities(cellGroupPossibilitiesByIndex(direction, param));
+
     int cell1, cell2;
     if (!findCellGroupIndexesForIdenticalPairs(groupPossibilities, cell1, cell2))
         return false;
     Q_ASSERT(cell1 >= 0 && cell1 < 9 && cell2 >= 0 && cell2 < 9 && cell1 != cell2);
     Q_ASSERT(groupPossibilities[cell1].count() == 2 && groupPossibilities[cell2].count() == 2);
+    Q_ASSERT(groupPossibilities[cell1][0] == groupPossibilities[cell2][0] && groupPossibilities[cell1][1] == groupPossibilities[cell2][1]);
     int num1 = groupPossibilities[cell1][0], num2 = groupPossibilities[cell1][1];
     Q_ASSERT(num1 != num2);
+
     bool changed = false;
     for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
         if (cgit.groupIndex != cell1 && cgit.groupIndex != cell2)
@@ -457,19 +470,122 @@ bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIterator
     return changed;
 }
 
-CellNum BoardModel::solveFindStepPass3()
+bool BoardModel::reduceAllGroupPossibilitiesForIdenticalPairs()
 {
     // find if there is a "group" (row/column/square) of cells
     // where there are 2 cells which both have just 2 possibilities and those are the same possibilities
     // from that we can reduce the possibilities in other members of the group to eliminate those 2 possibilities
+    bool changed = false;
+    for (CellGroupIteratorDirection direction : {Column, Row, Square})
+        for (int param = 0; param < 9; param++)
+            if (reduceCellGroupPossibilitiesForIdenticalPairs(direction, param))
+                changed = true;
+    return changed;
+}
+
+QList<int> BoardModel::groupIndexPossibilitiesListForNumber(CellGroupIteratorDirection direction, int param, int num) const
+{
+    // return a list of which cell indexes within a group are possible for a number
+    QList<int> indexes;
+    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+        if (numInCell(cgit.row, cgit.col) == 0)
+            if (possibilities[cgit.row][cgit.col][num])
+                indexes.append(cgit.groupIndex);
+    return indexes;
+}
+
+QVector<QList<int> > BoardModel::cellGroupPossibilitiesByNumber(CellGroupIteratorDirection direction, int param) const
+{
+    // return an array indexed by possibility number
+    // where each array element is a list of which "group" element indexes are possible for the number
+    QVector<QList<int> > groupVec(10);
+    for (int num = 1; num <= 9; num++)
+        groupVec[num] = groupIndexPossibilitiesListForNumber(direction, param, num);
+    return groupVec;
+}
+
+bool BoardModel::findNumsForUniquePairs(const QVector<QList<int> > &groupPossibilities, int &num1, int &num2) const
+{
+    // return whether, by looking through the array of lists of possible elements of a group for each number,
+    // there are any 2 elements which have just 2 possible locations *and* those locations are the same in both elements
+    // in that case, set `num1` & `num2` to the numbers of the identical pair
+    Q_ASSERT(groupPossibilities.count() == 10);
+    num1 = num2 = 0;
+    for (num1 = 1; num1 <= 9; num1++)
+        if (groupPossibilities[num1].count() == 2)
+            for (num2 = num1 + 1; num2 <= 9; num2++)
+                if (groupPossibilities[num2].count() == 2)
+                    if (groupPossibilities[num1][0] == groupPossibilities[num2][0] && groupPossibilities[num1][1] == groupPossibilities[num2][1])
+                        return true;
+    return false;
+}
+
+bool BoardModel::reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDirection direction, int param)
+{
+    // if within a "group" we find 2 cells
+    // which have among their (any number of) possibilities some 2 common possible numbers
+    // where neither of those 2 numbers is in any *other* cells' possibilities
+    // we can reduce the possibilities in those 2 cells to eliminate any *other* possibilities
+    // *and* then we can reduce the possibilities in any *other* cells to remove the 2 numbers
+    QVector<QList<int> > groupPossibilities(cellGroupPossibilitiesByNumber(direction, param));
+
+    int num1, num2;
+    if (!findNumsForUniquePairs(groupPossibilities, num1, num2))
+        return false;
+    Q_ASSERT(num1 >= 1 && num1 <= 9 && num2 >= 1 && num2 <= 9 && num1 != num2);
+    Q_ASSERT(groupPossibilities[num1].count() == 2 && groupPossibilities[num2].count() == 2);
+    Q_ASSERT(groupPossibilities[num1][0] == groupPossibilities[num2][0] && groupPossibilities[num1][1] == groupPossibilities[num2][1]);
+    int cell1 = groupPossibilities[num1][0], cell2 = groupPossibilities[num1][1];
+    Q_ASSERT(cell1 != cell2);
+
+    bool changed = false;
+    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+        if (cgit.groupIndex == cell1 || cgit.groupIndex == cell2)
+        {
+            for (int num = 1; num <= 9; num++)
+                if (num != num1 && num != num2)
+                    if (possibilities[cgit.row][cgit.col][num])
+                    {
+                        changed = true;
+                        setPossibility(cgit.row, cgit.col, num, false);
+                    }
+        }
+        else
+        {
+            if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
+            {
+                changed = true;
+                setPossibility(cgit.row, cgit.col, num1, false);
+                setPossibility(cgit.row, cgit.col, num2, false);
+            }
+        }
+    return changed;
+}
+
+bool BoardModel::reduceAllGroupPossibilitiesForUniquePairs()
+{
+    // find if there is a "group" (row/column/square) of cells
+    // where there are just 2 cells which both have among their (any number of) possibilities
+    // some 2 numbers neither of which is in any *other* cells' possibilities
+    // from that we can reduce the possibilities in those 2 cells to eliminate any *other* possibilities
+    // *and* then we will be able to reduce the possibilities in other members of the group to eliminate those 2 possibilities
+    // per `reduceAllGroupPossibilitiesForIdenticalPairs()`
+    bool changed = false;
+    for (CellGroupIteratorDirection direction : {Column, Row, Square})
+        for (int param = 0; param < 9; param++)
+            if (reduceCellGroupPossibilitiesForUniquePairs(direction, param))
+                changed = true;
+    return changed;
+}
+
+CellNum BoardModel::solveFindStepPass3()
+{
     bool changed;
     do
     {
-        changed = false;
-        for (CellGroupIteratorDirection direction : {Column, Row, Square})
-            for (int param = 0; param < 9; param++)
-                if (reduceCellGroupPossibilitiesForIdenticalPairs(direction, param))
-                    changed = true;
+        changed = reduceAllGroupPossibilitiesForIdenticalPairs();
+        if (!changed)
+            changed = reduceAllGroupPossibilitiesForUniquePairs();
         if (changed)
         {
             CellNum cellnum = solveFindStepPass1();

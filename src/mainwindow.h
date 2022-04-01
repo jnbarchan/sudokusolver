@@ -104,14 +104,20 @@ private:
     void clearAllData();
     int numInCell(int row, int col) const;
     bool numInCellHasDuplicate(int row, int col) const;
-    bool solveCellHasOnePossibility(int row, int col, int &num) const;
+    bool cellHasOnePossibility(int row, int col, int &num) const;
     CellNum solveFindStepPass1() const;
     CellNum cellGroupOnlyPossibilityForNum(CellGroupIteratorDirection direction, int param) const;
     CellNum solveFindStepPass2() const;
-    QList<int> numPossibilitiesList(int row, int col) const;
-    QVector<QList<int> > solveCellGroupPossibilities(CellGroupIteratorDirection direction, int param) const;
+    QList<int> numPossibilitiesListForCell(int row, int col) const;
+    QVector<QList<int> > cellGroupPossibilitiesByIndex(CellGroupIteratorDirection direction, int param) const;
     bool findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> > &groupPossibilities, int &cell1, int &cell2) const;
     bool reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param);
+    bool reduceAllGroupPossibilitiesForIdenticalPairs();
+    QList<int> groupIndexPossibilitiesListForNumber(CellGroupIteratorDirection direction, int param, int num) const;
+    QVector<QList<int> > cellGroupPossibilitiesByNumber(CellGroupIteratorDirection direction, int param) const;
+    bool findNumsForUniquePairs(const QVector<QList<int> > &groupPossibilities, int &num1, int &num2) const;
+    bool reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDirection direction, int param);
+    bool reduceAllGroupPossibilitiesForUniquePairs();
     CellNum solveFindStepPass3();
     CellNum solveFindStep();
 
