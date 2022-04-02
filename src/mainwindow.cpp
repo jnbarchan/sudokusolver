@@ -103,14 +103,18 @@ QString MainWindow::saveDirectory() const
 {
     showPossibilitiesAction->setChecked(true);
     actionShowPossibilities();
+    board->stopFlashing();
     board->solveStart();
+    board->startFlashing();
 }
 
 /*slot*/ void MainWindow::actionSolveStep()
 {
     showPossibilitiesAction->setChecked(true);
     actionShowPossibilities();
+    board->stopFlashing();
     CellNum cellNum = board->solveStep();
+    board->startFlashing();
     if (cellNum.isEmpty())
     {
         QString message("No move could be found");
@@ -123,7 +127,6 @@ QString MainWindow::saveDirectory() const
         QMessageBox::warning(this, "No Move", message);
         return;
     }
-    boardView->flashCell(board->index(cellNum.row, cellNum.col));
 }
 
 
@@ -132,6 +135,8 @@ QString MainWindow::saveDirectory() const
 BoardModel::BoardModel(QObject *parent /*= nullptr*/)
     : QStandardItemModel(9, 9, parent)
 {
+    _flashCellIndex = QModelIndex();
+    _flashPossibilities.clear();
     resetAllPossibilities();
 }
 
@@ -208,6 +213,8 @@ void BoardModel::setPossibility(int row, int col, int num, bool possible)
         return;
     possibilities[row][col][num] = possible;
     QModelIndex ix(index(row, col));
+    FlashPossibilities fp(ix, num);
+    _flashPossibilities.append(fp);
     emit dataChanged(ix, ix);
 }
 
@@ -243,6 +250,7 @@ void BoardModel::reduceAllPossibilities()
 
 void BoardModel::clearAllData()
 {
+    stopFlashing();
     for (int row = 0; row < rowCount(); row++)
         for (int col = 0; col < columnCount(); col++)
             clearItemData(index(row, col));
@@ -426,47 +434,37 @@ QVector<QList<int> > BoardModel::cellGroupPossibilitiesByIndex(CellGroupIterator
     return groupVec;
 }
 
-bool BoardModel::findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> > &groupPossibilities, int &cell1, int &cell2) const
-{
-    // return whether, by looking through the array of lists of possible numbers in each element of a group,
-    // there are any 2 elements which have just 2 possible numbers *and* those numbers are the same in both elements
-    // in that case, set `cell1` & `cell2` to the group indexes of the identical pair
-    Q_ASSERT(groupPossibilities.count() == 9);
-    cell1 = cell2 = -1;
-    for (cell1 = 0; cell1 < 9; cell1++)
-        if (groupPossibilities[cell1].count() == 2)
-            for (cell2 = cell1 + 1; cell2 < 9; cell2++)
-                if (groupPossibilities[cell2].count() == 2)
-                    if (groupPossibilities[cell1][0] == groupPossibilities[cell2][0] && groupPossibilities[cell1][1] == groupPossibilities[cell2][1])
-                        return true;
-    return false;
-}
-
 bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param)
 {
     // if within a "group" we find 2 cells
     // where each cell has just 2 possibilities *and* those numbers are the same in both cells
     // we can go through all *other* cells in the group removing those 2 numbers from their possibles
     QVector<QList<int> > groupPossibilities(cellGroupPossibilitiesByIndex(direction, param));
-
-    int cell1, cell2;
-    if (!findCellGroupIndexesForIdenticalPairs(groupPossibilities, cell1, cell2))
-        return false;
-    Q_ASSERT(cell1 >= 0 && cell1 < 9 && cell2 >= 0 && cell2 < 9 && cell1 != cell2);
-    Q_ASSERT(groupPossibilities[cell1].count() == 2 && groupPossibilities[cell2].count() == 2);
-    Q_ASSERT(groupPossibilities[cell1][0] == groupPossibilities[cell2][0] && groupPossibilities[cell1][1] == groupPossibilities[cell2][1]);
-    int num1 = groupPossibilities[cell1][0], num2 = groupPossibilities[cell1][1];
-    Q_ASSERT(num1 != num2);
+    Q_ASSERT(groupPossibilities.count() == 9);
 
     bool changed = false;
-    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
-        if (cgit.groupIndex != cell1 && cgit.groupIndex != cell2)
-            if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
-            {
-                changed = true;
-                setPossibility(cgit.row, cgit.col, num1, false);
-                setPossibility(cgit.row, cgit.col, num2, false);
-            }
+    for (int cell1 = 0; cell1 < 9; cell1++)
+    {
+        if (groupPossibilities[cell1].count() != 2)
+            continue;
+        for (int cell2 = cell1 + 1; cell2 < 9; cell2++)
+        {
+            if (groupPossibilities[cell2].count() != 2)
+                continue;
+            int num1 = groupPossibilities[cell1][0], num2 = groupPossibilities[cell1][1];
+            Q_ASSERT(num1 != num2);
+            if (num1 != groupPossibilities[cell2][0] || num2 != groupPossibilities[cell2][1])
+                continue;
+            for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+                if (cgit.groupIndex != cell1 && cgit.groupIndex != cell2)
+                    if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
+                    {
+                        changed = true;
+                        setPossibility(cgit.row, cgit.col, num1, false);
+                        setPossibility(cgit.row, cgit.col, num2, false);
+                    }
+        }
+    }
     return changed;
 }
 
@@ -504,22 +502,6 @@ QVector<QList<int> > BoardModel::cellGroupPossibilitiesByNumber(CellGroupIterato
     return groupVec;
 }
 
-bool BoardModel::findNumsForUniquePairs(const QVector<QList<int> > &groupPossibilities, int &num1, int &num2) const
-{
-    // return whether, by looking through the array of lists of possible elements of a group for each number,
-    // there are any 2 elements which have just 2 possible locations *and* those locations are the same in both elements
-    // in that case, set `num1` & `num2` to the numbers of the identical pair
-    Q_ASSERT(groupPossibilities.count() == 10);
-    num1 = num2 = 0;
-    for (num1 = 1; num1 <= 9; num1++)
-        if (groupPossibilities[num1].count() == 2)
-            for (num2 = num1 + 1; num2 <= 9; num2++)
-                if (groupPossibilities[num2].count() == 2)
-                    if (groupPossibilities[num1][0] == groupPossibilities[num2][0] && groupPossibilities[num1][1] == groupPossibilities[num2][1])
-                        return true;
-    return false;
-}
-
 bool BoardModel::reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDirection direction, int param)
 {
     // if within a "group" we find 2 cells
@@ -528,37 +510,43 @@ bool BoardModel::reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDir
     // we can reduce the possibilities in those 2 cells to eliminate any *other* possibilities
     // *and* then we can reduce the possibilities in any *other* cells to remove the 2 numbers
     QVector<QList<int> > groupPossibilities(cellGroupPossibilitiesByNumber(direction, param));
-
-    int num1, num2;
-    if (!findNumsForUniquePairs(groupPossibilities, num1, num2))
-        return false;
-    Q_ASSERT(num1 >= 1 && num1 <= 9 && num2 >= 1 && num2 <= 9 && num1 != num2);
-    Q_ASSERT(groupPossibilities[num1].count() == 2 && groupPossibilities[num2].count() == 2);
-    Q_ASSERT(groupPossibilities[num1][0] == groupPossibilities[num2][0] && groupPossibilities[num1][1] == groupPossibilities[num2][1]);
-    int cell1 = groupPossibilities[num1][0], cell2 = groupPossibilities[num1][1];
-    Q_ASSERT(cell1 != cell2);
+    Q_ASSERT(groupPossibilities.count() == 10);
 
     bool changed = false;
-    for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
-        if (cgit.groupIndex == cell1 || cgit.groupIndex == cell2)
+    for (int num1 = 1; num1 <= 9; num1++)
+    {
+        if (groupPossibilities[num1].count() != 2)
+            continue;
+        for (int num2 = num1 + 1; num2 <= 9; num2++)
         {
-            for (int num = 1; num <= 9; num++)
-                if (num != num1 && num != num2)
-                    if (possibilities[cgit.row][cgit.col][num])
+            if (groupPossibilities[num2].count() != 2)
+                continue;
+            int cell1 = groupPossibilities[num1][0], cell2 = groupPossibilities[num1][1];
+            Q_ASSERT(cell1 != cell2);
+            if (cell1 != groupPossibilities[num2][0] || cell2 != groupPossibilities[num2][1])
+                continue;
+            for (CellGroupIterator cgit(direction, param); !cgit.atEnd(); cgit.next())
+                if (cgit.groupIndex == cell1 || cgit.groupIndex == cell2)
+                {
+                    for (int num = 1; num <= 9; num++)
+                        if (num != num1 && num != num2)
+                            if (possibilities[cgit.row][cgit.col][num])
+                            {
+                                changed = true;
+                                setPossibility(cgit.row, cgit.col, num, false);
+                            }
+                }
+                else
+                {
+                    if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
                     {
                         changed = true;
-                        setPossibility(cgit.row, cgit.col, num, false);
+                        setPossibility(cgit.row, cgit.col, num1, false);
+                        setPossibility(cgit.row, cgit.col, num2, false);
                     }
+                }
         }
-        else
-        {
-            if (possibilities[cgit.row][cgit.col][num1] || possibilities[cgit.row][cgit.col][num2])
-            {
-                changed = true;
-                setPossibility(cgit.row, cgit.col, num1, false);
-                setPossibility(cgit.row, cgit.col, num2, false);
-            }
-        }
+    }
     return changed;
 }
 
@@ -621,7 +609,9 @@ CellNum BoardModel::solveStep()
     CellNum cellNum = solveFindStep();
     if (cellNum.isEmpty())
         return cellNum;
-    setData(index(cellNum.row, cellNum.col), cellNum.num);
+    QModelIndex cellIndex(index(cellNum.row, cellNum.col));
+    setData(cellIndex, cellNum.num);
+    _flashCellIndex = cellIndex;
     reduceAllPossibilities();
     return cellNum;
 }
@@ -633,8 +623,28 @@ bool BoardModel::numIsPossible(int num, const QModelIndex &index) const
     return possibilities[index.row()][index.column()][num];
 }
 
+void BoardModel::stopFlashing()
+{
+    emit endFlashing();
+    _flashCellIndex = QModelIndex();
+    _flashPossibilities.clear();
+}
+
+void BoardModel::startFlashing()
+{
+    emit beginFlashing();
+}
+
+void BoardModel::markFlashPossibilitiesAsChanged()
+{
+    const QList<BoardModel::FlashPossibilities> &fps(flashPossibilities());
+    for (const FlashPossibilities &fp : fps)
+        emit dataChanged(fp.index, fp.index, {Qt::ForegroundRole});
+}
+
 /*slot*/ void BoardModel::modelDataEdited()
 {
+    stopFlashing();
     resetAllPossibilities();
     checkForDuplicates();
 }
@@ -690,6 +700,8 @@ bool BoardModel::numIsPossible(int num, const QModelIndex &index) const
 BoardView::BoardView(QWidget *parent /*= nullptr*/)
     : QTableView(parent)
 {
+    boardModel = nullptr;
+
     horizontalHeader()->hide();
     verticalHeader()->hide();
     horizontalHeader()->setDefaultSectionSize(80);
@@ -700,7 +712,7 @@ BoardView::BoardView(QWidget *parent /*= nullptr*/)
 
     setEditTriggers(QAbstractItemView::DoubleClicked | QAbstractItemView::SelectedClicked | QAbstractItemView::AnyKeyPressed);
 
-    cellDelegate = new BoardCellDelegate;
+    cellDelegate = new BoardCellDelegate(this);
     setItemDelegate(cellDelegate);
     connect(cellDelegate, &BoardCellDelegate::modelDataEdited, this, &BoardView::modelDataEdited);
 
@@ -709,60 +721,67 @@ BoardView::BoardView(QWidget *parent /*= nullptr*/)
 
 void BoardView::setShowPossibilities(bool show)
 {
+    if (cellDelegate->showPossibilities() == show)
+        return;
     cellDelegate->setShowPossibilities(show);
-    update();
+    viewport()->update();
 }
 
-void BoardView::flashCell(const QModelIndex &index)
+bool BoardView::flashHide() const
 {
-    if (cellFlasher.index.isValid())
-    {
-        cellFlasher.countdown = 0;
-        cellFlasherTimeout();
-    }
-    if (!index.isValid())
-        return;
-    cellFlasher.index = index;
-    cellFlasher.countdown = 8;
-    cellFlasher.timer.start(500);
+    return ((cellFlasher.countdown & 1) != 0);
 }
 
 /*virtual*/ void BoardView::setModel(QAbstractItemModel *model) /*override*/
 {
-    BoardModel *boardModel = qobject_cast<BoardModel *>(model);
+    this->boardModel = qobject_cast<BoardModel *>(model);
     if (model)
         Q_ASSERT(boardModel);
     cellDelegate->setBoardModel(boardModel);
     QTableView::setModel(boardModel);
     if (boardModel)
+    {
         connect(boardModel, &QAbstractItemModel::modelAboutToBeReset, [this]() { cellFlasher.countdown = 0; cellFlasherTimeout(); });
+        connect(boardModel, &BoardModel::beginFlashing, this, &BoardView::modelBeginFlashing);
+        connect(boardModel, &BoardModel::endFlashing, this, &BoardView::modelEndFlashing);
+    }
 }
 
-void BoardView::cellFlasherTimeout()
+/*slot*/ void BoardView::modelBeginFlashing()
+{
+    cellFlasher.countdown = 8;
+    cellFlasher.timer.start(500);
+}
+
+/*slot*/ void BoardView::modelEndFlashing()
+{
+    cellFlasher.countdown = 0;
+    cellFlasherTimeout();
+}
+
+/*slot*/ void BoardView::cellFlasherTimeout()
 {
     if (cellFlasher.countdown > 0)
         cellFlasher.countdown--;
-    if (cellFlasher.index.isValid())
-    {
-        bool showHide = ((cellFlasher.countdown & 1) == 0);
-        QVariant colour = showHide ? QVariant() : QColor(0, 0, 0, 0);
-        model()->setData(cellFlasher.index, colour, Qt::ForegroundRole);
-    }
+    const QModelIndex &index(boardModel->flashCellIndex());
+    if (index.isValid())
+        boardModel->setData(index, flashHide() ? QColor(0, 0, 0, 0) : QVariant(), Qt::ForegroundRole);
+    if (cellDelegate->showPossibilities())
+        boardModel->markFlashPossibilitiesAsChanged();
     if (cellFlasher.countdown == 0)
-    {
         cellFlasher.timer.stop();
-        cellFlasher.index = QModelIndex();
-    }
 }
 
 
 ////////// CLASS BoardCellDelegate //////////
 
-BoardCellDelegate::BoardCellDelegate(QObject *parent /*= nullptr*/)
-    : QStyledItemDelegate(parent)
+BoardCellDelegate::BoardCellDelegate(BoardView *boardViewParent)
+    : QStyledItemDelegate(boardViewParent)
 {
-    _showPossibilities = false;
+    Q_ASSERT(boardViewParent);
+    boardView = boardViewParent;
     boardModel = nullptr;
+    _showPossibilities = false;
 }
 
 bool BoardCellDelegate::showPossibilities() const
@@ -778,6 +797,14 @@ void BoardCellDelegate::setShowPossibilities(bool show)
 void BoardCellDelegate::setBoardModel(BoardModel *boardModel)
 {
     this->boardModel = boardModel;
+}
+
+bool BoardCellDelegate::isNumToBeFlashed(int num, const QModelIndex &index, const QList<BoardModel::FlashPossibilities> &fps) const
+{
+    for (const BoardModel::FlashPossibilities &fp : fps)
+        if (fp.index == index && fp.num == num)
+            return true;
+    return false;
 }
 
 /*virtual*/ QWidget *BoardCellDelegate::createEditor(QWidget *parent, const QStyleOptionViewItem &option, const QModelIndex &index) const /*override*/
@@ -815,6 +842,8 @@ void BoardCellDelegate::setBoardModel(BoardModel *boardModel)
     {
         if (!_showPossibilities)
             return;
+        bool flashHide = boardView->flashHide();
+        const QList<BoardModel::FlashPossibilities> &fps (boardModel->flashPossibilities());
         painter->save();
         int w = option.rect.width() / 3, h = option.rect.height() / 3;
         for (int row = 0; row < 3; row++)
@@ -823,13 +852,18 @@ void BoardCellDelegate::setBoardModel(BoardModel *boardModel)
                 QRect rect(option.rect.x() + col * w, option.rect.y() + row * h, w, h);
                 rect.adjust(4, 4, -4, -4);
                 int num = row * 3 + col + 1;
-                if (!boardModel->numIsPossible(num, index))
-                    painter->fillRect(rect, Qt::darkGray);
-                else
+                bool numIsPossible = boardModel->numIsPossible(num, index);
+                bool numIsToBeInverted = (flashHide && isNumToBeFlashed(num, index, fps));
+                bool showNum = numIsPossible;
+                if (numIsToBeInverted)
+                    showNum = !showNum;
+                if (showNum)
                 {
                     painter->setPen(Qt::lightGray);
                     painter->drawText(rect, Qt::AlignCenter, QString::number(num));
                 }
+                else
+                    painter->fillRect(rect, Qt::darkGray);
             }
         painter->restore();
         return;

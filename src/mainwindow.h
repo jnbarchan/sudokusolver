@@ -63,6 +63,17 @@ class BoardModel : public QStandardItemModel
     Q_OBJECT
 
 public:
+    struct FlashPossibilities
+    {
+        QModelIndex index;
+        int num;
+        FlashPossibilities(const QModelIndex &index, int num)
+        {
+            this->index = index;
+            this->num = num;
+        }
+    };
+
     BoardModel(QObject *parent = nullptr);
 
     void clearBoard();
@@ -73,6 +84,12 @@ public:
     void solveStart();
     CellNum solveStep();
     bool numIsPossible(int num, const QModelIndex &index) const;
+
+    const QModelIndex &flashCellIndex() { return _flashCellIndex; }
+    const QList<FlashPossibilities> &flashPossibilities() { return _flashPossibilities; };
+    void stopFlashing();
+    void startFlashing();
+    void markFlashPossibilitiesAsChanged();
 
     virtual QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     virtual Qt::ItemFlags flags(const QModelIndex &index) const override;
@@ -97,6 +114,9 @@ private:
     bool possibilities[9][9][10];
     bool possibilitiesInitialised;
 
+    QModelIndex _flashCellIndex;
+    QList<FlashPossibilities> _flashPossibilities;
+
     void setPossibility(int row, int col, int num, bool possible);
     void resetAllPossibilities();
     void reducePossibilities(int row, int col);
@@ -110,16 +130,18 @@ private:
     CellNum solveFindStepPass2() const;
     QList<int> numPossibilitiesListForCell(int row, int col) const;
     QVector<QList<int> > cellGroupPossibilitiesByIndex(CellGroupIteratorDirection direction, int param) const;
-    bool findCellGroupIndexesForIdenticalPairs(const QVector<QList<int> > &groupPossibilities, int &cell1, int &cell2) const;
     bool reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIteratorDirection direction, int param);
     bool reduceAllGroupPossibilitiesForIdenticalPairs();
     QList<int> groupIndexPossibilitiesListForNumber(CellGroupIteratorDirection direction, int param, int num) const;
     QVector<QList<int> > cellGroupPossibilitiesByNumber(CellGroupIteratorDirection direction, int param) const;
-    bool findNumsForUniquePairs(const QVector<QList<int> > &groupPossibilities, int &num1, int &num2) const;
     bool reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDirection direction, int param);
     bool reduceAllGroupPossibilitiesForUniquePairs();
     CellNum solveFindStepPass3();
     CellNum solveFindStep();
+
+signals:
+    void beginFlashing();
+    void endFlashing();
 
 public slots:
     void modelDataEdited();
@@ -135,29 +157,32 @@ public:
     BoardView(QWidget *parent = nullptr);
 
     void setShowPossibilities(bool show);
-    void flashCell(const QModelIndex &index);
+    bool flashHide() const;
     virtual void setModel(QAbstractItemModel *model) override;
 
 private:
     struct CellFlasher
     {
         QTimer timer;
-        QModelIndex index;
         int countdown;
 
         CellFlasher()
         {
             timer.setInterval(4000);
-            index = QModelIndex();
             countdown = 0;
         }
     };
 
+    BoardModel *boardModel;
     CellFlasher cellFlasher;
     BoardCellDelegate *cellDelegate;
 
 signals:
     void modelDataEdited(const QModelIndex &index) const;
+
+public slots:
+    void modelBeginFlashing();
+    void modelEndFlashing();
 
 private slots:
     void cellFlasherTimeout();
@@ -170,7 +195,7 @@ class BoardCellDelegate : public QStyledItemDelegate
     Q_OBJECT
 
 public:
-    BoardCellDelegate(QObject *parent = nullptr);
+    BoardCellDelegate(BoardView *boardViewParent);
     bool showPossibilities() const;
     void setShowPossibilities(bool show);
     void setBoardModel(BoardModel *boardModel);
@@ -180,8 +205,11 @@ public:
     virtual void setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const override;
 
 private:
-    bool _showPossibilities;
+    BoardView *boardView;
     BoardModel *boardModel;
+    bool _showPossibilities;
+
+    bool isNumToBeFlashed(int num, const QModelIndex &index, const QList<BoardModel::FlashPossibilities> &fps) const;
 
 signals:
     void modelDataEdited(const QModelIndex &index) const;
