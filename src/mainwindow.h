@@ -45,6 +45,10 @@ public:
 private:
     QAction *showPossibilitiesAction;
     QString saveDirectory() const;
+    void loadFile(const QString &filePath);
+
+public slots:
+    void initialLoad(const QString &fileName);
 
 private slots:
     void actionClear();
@@ -79,6 +83,7 @@ public:
     void clearBoard();
     bool isSolved() const;
     bool checkForDuplicates();
+    bool checkForNoPossibilities() const;
     void loadBoard(QTextStream &ts);
     void saveBoard(QTextStream &ts) const;
     void solveStart();
@@ -105,6 +110,7 @@ private:
         int groupIndex;
 
         static int paramForDirection(CellGroupIteratorDirection direction, int row, int col);
+        static void rowColForIndexInSquare(int index, int square, int &row, int &col);
         CellGroupIterator(CellGroupIteratorDirection direction, int param);
         CellGroupIterator(CellGroupIteratorDirection direction, int row, int col);
         bool atEnd() const;
@@ -136,6 +142,8 @@ private:
     QVector<QList<int> > cellGroupPossibilitiesByNumber(CellGroupIteratorDirection direction, int param) const;
     bool reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDirection direction, int param);
     bool reduceAllGroupPossibilitiesForUniquePairs();
+    bool reduceRowColumnPossibilitiesForSquare(int param);
+    bool reduceAllRowColumnPossibilitiesForSquares();
     CellNum solveFindStepPass3();
     CellNum solveFindStep();
 

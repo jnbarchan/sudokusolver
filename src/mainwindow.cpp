@@ -48,20 +48,14 @@ QString MainWindow::saveDirectory() const
     return QCoreApplication::applicationDirPath() + "/../sudokusolver/saves";
 }
 
-/*slot*/ void MainWindow::actionClear()
+void MainWindow::loadFile(const QString &filePath)
 {
-    board->clearBoard();
-}
-
-/*slot*/ void MainWindow::actionLoad()
-{
-    QString fileName = QFileDialog::getOpenFileName(this, "Open File", saveDirectory());
-    if (fileName.isNull())
+    if (filePath.isEmpty())
         return;
-    QFile f(fileName);
+    QFile f(filePath);
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text))
     {
-        QMessageBox::warning(this, "Failed to Open File", f.errorString());
+        QMessageBox::warning(this, "Failed to Open File", QString("%1: %2").arg(filePath).arg(f.errorString()));
         return;
     }
     QTextStream ts(&f);
@@ -74,15 +68,35 @@ QString MainWindow::saveDirectory() const
     }
 }
 
+/*slot*/ void MainWindow::initialLoad(const QString &fileName)
+{
+    if (fileName.isEmpty())
+        return;
+    QFileInfo fi(saveDirectory(), fileName);
+    loadFile(fi.filePath());
+}
+
+/*slot*/ void MainWindow::actionClear()
+{
+    board->clearBoard();
+}
+
+/*slot*/ void MainWindow::actionLoad()
+{
+    QString filePath = QFileDialog::getOpenFileName(this, "Open File", saveDirectory());
+    if (!filePath.isEmpty())
+        loadFile(filePath);
+}
+
 /*slot*/ void MainWindow::actionSave()
 {
-    QString fileName = QFileDialog::getSaveFileName(this, "Save File", saveDirectory());
-    if (fileName.isNull())
+    QString filePath = QFileDialog::getSaveFileName(this, "Save File", saveDirectory());
+    if (filePath.isNull())
         return;
-    QFile f(fileName);
+    QFile f(filePath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Text))
     {
-        QMessageBox::warning(this, "Failed to Save File", f.errorString());
+        QMessageBox::warning(this, "Failed to Save File",  QString("%1: %2").arg(filePath).arg(f.errorString()));
         return;
     }
     QTextStream ts(&f);
@@ -122,6 +136,8 @@ QString MainWindow::saveDirectory() const
             message += " (board is illegal/has duplicates)";
         else if (board->isSolved())
             message += " (board is solved)";
+        else if (board->checkForNoPossibilities())
+            message += " (board has cell with no possibilities)";
         else
             message += " (cannot find any move which is certain)";
         QMessageBox::warning(this, "No Move", message);
@@ -151,6 +167,12 @@ BoardModel::BoardModel(QObject *parent /*= nullptr*/)
     case Square: return (row / 3) * 3 + (col / 3);
     }
     return -1;
+}
+
+/*static*/ void BoardModel::CellGroupIterator::rowColForIndexInSquare(int index, int square, int &row, int &col)
+{
+    row = square / 3 * 3 + index / 3;
+    col = square % 3 * 3 + index % 3;
 }
 
 BoardModel::CellGroupIterator::CellGroupIterator(CellGroupIteratorDirection direction, int param)
@@ -216,6 +238,12 @@ void BoardModel::setPossibility(int row, int col, int num, bool possible)
     FlashPossibilities fp(ix, num);
     _flashPossibilities.append(fp);
     emit dataChanged(ix, ix);
+    //VERYTEMPORARY
+//    if (num == 7)
+//    {
+//        QCoreApplication::processEvents();
+//        qDebug() << num;
+//    }
 }
 
 void BoardModel::resetAllPossibilities()
@@ -301,6 +329,22 @@ bool BoardModel::checkForDuplicates()
             anyDuplicate |= duplicate;
         }
     return anyDuplicate;
+}
+
+bool BoardModel::checkForNoPossibilities() const
+{
+    for (int row = 0; row < 9; row++)
+        for (int col = 0; col < 9; col++)
+            if (numInCell(row, col) == 0)
+            {
+                int count = 0;
+                for (int num = 1; num <= 9; num++)
+                    if (possibilities[row][col][num])
+                        count++;
+                if (count == 0)
+                    return true;
+            }
+    return false;
 }
 
 void BoardModel::loadBoard(QTextStream &ts)
@@ -470,7 +514,7 @@ bool BoardModel::reduceCellGroupPossibilitiesForIdenticalPairs(CellGroupIterator
 
 bool BoardModel::reduceAllGroupPossibilitiesForIdenticalPairs()
 {
-    // find if there is a "group" (row/column/square) of cells
+    // find if there are any "groups" (row/column/square) of cells
     // where there are 2 cells which both have just 2 possibilities and those are the same possibilities
     // from that we can reduce the possibilities in other members of the group to eliminate those 2 possibilities
     bool changed = false;
@@ -552,7 +596,7 @@ bool BoardModel::reduceCellGroupPossibilitiesForUniquePairs(CellGroupIteratorDir
 
 bool BoardModel::reduceAllGroupPossibilitiesForUniquePairs()
 {
-    // find if there is a "group" (row/column/square) of cells
+    // find if there are any "groups" (row/column/square) of cells
     // where there are just 2 cells which both have among their (any number of) possibilities
     // some 2 numbers neither of which is in any *other* cells' possibilities
     // from that we can reduce the possibilities in those 2 cells to eliminate any *other* possibilities
@@ -566,14 +610,69 @@ bool BoardModel::reduceAllGroupPossibilitiesForUniquePairs()
     return changed;
 }
 
+bool BoardModel::reduceRowColumnPossibilitiesForSquare(int param)
+{
+    // find if in a square
+    // there is a number *all* of whose possibilities lie *only* in a row or a column in the square
+    // from that we can reduce the possibilities in any *other* squares the row or column runs through
+    QVector<QList<int> > groupPossibilities(cellGroupPossibilitiesByNumber(Square, param));
+    Q_ASSERT(groupPossibilities.count() == 10);
+
+    bool changed = false;
+    for (int num = 1; num <= 9; num++)
+    {
+        int count = groupPossibilities[num].count();
+        if (count < 2 || count > 3)
+            continue;
+        int row0, col0, row1, col1, row2, col2;
+        CellGroupIterator::rowColForIndexInSquare(groupPossibilities[num][0], param, row0, col0);
+        CellGroupIterator::rowColForIndexInSquare(groupPossibilities[num][1], param, row1, col1);
+        row2 = row1; col2 = col1;
+        if (count == 3)
+            CellGroupIterator::rowColForIndexInSquare(groupPossibilities[num][2], param, row2, col2);
+        CellGroupIteratorDirection direction;
+        if (row1 == row0 && row2 == row0)
+            direction = Row;
+        else if (col1 == col0 && col2 == col0)
+            direction = Column;
+        else
+            continue;
+        for (CellGroupIterator cgit(direction, (direction == Row) ? row0 : col0); !cgit.atEnd(); cgit.next())
+            if (CellGroupIterator::paramForDirection(Square, cgit.row, cgit.col) != param)
+                if (numInCell(cgit.row, cgit.col) == 0)
+                    if (possibilities[cgit.row][cgit.col][num])
+                    {
+                        changed = true;
+                        setPossibility(cgit.row, cgit.col, num, false);
+                    }
+    }
+    return changed;
+}
+
+bool BoardModel::reduceAllRowColumnPossibilitiesForSquares()
+{
+    // find if there are any squares of cells
+    // where there is a number *all* of whose possibilities lie *only* in a row or a column in the square
+    // from that we can reduce the possibilities in any *other* squares the row or column runs through
+    bool changed = false;
+    for (int param = 0; param < 9; param++)
+        if (reduceRowColumnPossibilitiesForSquare(param))
+            changed = true;
+    return changed;
+}
+
 CellNum BoardModel::solveFindStepPass3()
 {
     bool changed;
     do
     {
-        changed = reduceAllGroupPossibilitiesForIdenticalPairs();
+        changed = false;
+        if (!changed)
+            changed = reduceAllGroupPossibilitiesForIdenticalPairs();
         if (!changed)
             changed = reduceAllGroupPossibilitiesForUniquePairs();
+        if (!changed)
+            changed = reduceAllRowColumnPossibilitiesForSquares();
         if (changed)
         {
             CellNum cellnum = solveFindStepPass1();
@@ -817,6 +916,7 @@ bool BoardCellDelegate::isNumToBeFlashed(int num, const QModelIndex &index, cons
     QVariant value(index.data());
     QString str(value.toString());
     combo->setCurrentText(str);
+    QTimer::singleShot(100, [combo]{ combo->showPopup(); });
     return combo;
 }
 
