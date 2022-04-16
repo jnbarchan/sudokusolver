@@ -3,6 +3,7 @@
 #include <QFileDialog>
 #include <QHeaderView>
 #include <QMenuBar>
+#include <QMetaProperty>
 #include <QMessageBox>
 #include <QPainter>
 
@@ -19,6 +20,11 @@ MainWindow::MainWindow(QWidget *parent)
     setWindowTitle("Sudoku Solver");
     resize(800, 800);
 
+    board = new BoardModel(this);
+    boardView = new BoardView(this);
+    boardView->setModel(board);
+    connect(boardView, &BoardView::modelDataEdited, board, &BoardModel::modelDataEdited);
+
     QMenu *fileMenu = menuBar()->addMenu("&File");
     fileMenu->addAction("&Clear", this, &MainWindow::actionClear);
     fileMenu->addAction("&Load", this, &MainWindow::actionLoad);
@@ -30,11 +36,17 @@ MainWindow::MainWindow(QWidget *parent)
     showPossibilitiesAction->setCheckable(true);
     solveMenu->addAction("St&art", this, &MainWindow::actionSolveStart);
     solveMenu->addAction("St&ep", this, &MainWindow::actionSolveStep, QKeySequence(Qt::CTRL + Qt::Key_E));
-
-    board = new BoardModel(this);
-    boardView = new BoardView(this);
-    boardView->setModel(board);
-    connect(boardView, &BoardView::modelDataEdited, board, &BoardModel::modelDataEdited);
+    solveMenu->addSeparator();
+//    QAction *undoAction = solveMenu->addAction("Undo", this, &MainWindow::actionUndo, QKeySequence::Undo);
+    QAction *undoAction = board->undoStack.createUndoAction(this);
+    undoAction->setShortcut(QKeySequence::Undo);
+    solveMenu->addAction(undoAction);
+//    QAction *redoAction = solveMenu->addAction("Redo", this, &MainWindow::actionRedo, QKeySequence::Redo);
+    QAction *redoAction = board->undoStack.createRedoAction(this);
+    redoAction->setShortcut(QKeySequence::Redo);
+    solveMenu->addAction(redoAction);
+//    undoAction->setEnabled(false);
+//    redoAction->setEnabled(false);
 
     this->setCentralWidget(boardView);
 }
@@ -145,7 +157,6 @@ void MainWindow::loadFile(const QString &filePath)
     }
 }
 
-
 ////////// CLASS BoardModel //////////
 
 BoardModel::BoardModel(QObject *parent /*= nullptr*/)
@@ -153,7 +164,8 @@ BoardModel::BoardModel(QObject *parent /*= nullptr*/)
 {
     _flashCellIndex = QModelIndex();
     _flashPossibilities.clear();
-    resetAllPossibilities();
+    clearAllData();
+    undoStack.push(new QUndoCommand);
 }
 
 ///// STRUCT CellGroupIterator /////
@@ -229,6 +241,28 @@ bool BoardModel::CellGroupIterator::next()
 }
 
 
+///// CLASS SetDataUndoCommand /////
+
+BoardModel::SetDataUndoCommand::SetDataUndoCommand(BoardModel *board, const QModelIndex &index, const QVariant &oldValue, const QVariant &newValue)
+    : QUndoCommand()
+{
+    this->board = board;
+    this->index = index;
+    this->oldValue = oldValue;
+    this->newValue = newValue;
+}
+
+/*virtual*/ void BoardModel::SetDataUndoCommand::redo() /*override*/
+{
+    board->doSetDataUndoCommand(index, oldValue, newValue);
+}
+
+/*virtual*/ void BoardModel::SetDataUndoCommand::undo() /*override*/
+{
+    board->doSetDataUndoCommand(index, newValue, oldValue);
+}
+
+
 void BoardModel::setPossibility(int row, int col, int num, bool possible)
 {
     if (possibilities[row][col][num] == possible)
@@ -283,6 +317,7 @@ void BoardModel::clearAllData()
         for (int col = 0; col < columnCount(); col++)
             clearItemData(index(row, col));
     resetAllPossibilities();
+    undoStack.clear();
 }
 
 void BoardModel::clearBoard()
@@ -741,11 +776,28 @@ void BoardModel::markFlashPossibilitiesAsChanged()
         emit dataChanged(fp.index, fp.index, {Qt::ForegroundRole});
 }
 
-/*slot*/ void BoardModel::modelDataEdited()
+void BoardModel::doSetDataUndoCommand(const QModelIndex &index, const QVariant &oldValue, const QVariant &newValue)
 {
+    Q_UNUSED(oldValue);
+    if (!setData(index, newValue, Qt::EditRole))
+        return;
     stopFlashing();
     resetAllPossibilities();
     checkForDuplicates();
+}
+
+/*slot*/ void BoardModel::modelDataEdited(const QModelIndex &index, int num)
+{
+    if (!index.isValid())
+        return;
+    QVariant value = (num != 0) ? QVariant(num) : QVariant();
+    QVariant oldValue(data(index, Qt::EditRole));
+    if (oldValue.toInt() == 0)
+        oldValue = QVariant();
+    if (value == oldValue)
+        return;
+    SetDataUndoCommand *command = new SetDataUndoCommand(this, index, oldValue, value);
+    undoStack.push(command);
 }
 
 /*virtual*/ QVariant BoardModel::data(const QModelIndex &index, int role /*= Qt::DisplayRole*/) const /*override*/
@@ -782,9 +834,9 @@ void BoardModel::markFlashPossibilitiesAsChanged()
         {
             bool ok;
             int num = value.toInt(&ok);
-            if (!ok || num < 1 || num > 9)
+            if (!ok || num < 0 || num > 9)
                 return false;
-            value2 = QVariant(num);
+            value2 = (num != 0) ? QVariant(num) : QVariant();
         }
         return QStandardItemModel::setData(index, value2, role);
     }
@@ -973,7 +1025,12 @@ bool BoardCellDelegate::isNumToBeFlashed(int num, const QModelIndex &index, cons
 
 /*virtual*/ void BoardCellDelegate::setModelData(QWidget *editor, QAbstractItemModel *model, const QModelIndex &index) const /*override*/
 {
-    QStyledItemDelegate::setModelData(editor, model, index);
-    emit modelDataEdited(index);
+//    QStyledItemDelegate::setModelData(editor, model, index);
+    Q_ASSERT(model == boardModel);
+    QByteArray propertyName(editor->metaObject()->userProperty().name());
+    Q_ASSERT(propertyName == "currentText");
+    QVariant value(editor->property(propertyName));
+    int num = value.toInt();
+    emit modelDataEdited(index, num);
 }
 

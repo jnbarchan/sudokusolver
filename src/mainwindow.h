@@ -9,6 +9,7 @@
 #include <QTableView>
 #include <QTextStream>
 #include <QTimer>
+#include <QUndoStack>
 #include <QVector>
 
 class BoardModel;
@@ -80,6 +81,7 @@ public:
 
     BoardModel(QObject *parent = nullptr);
 
+    QUndoStack undoStack;
     void clearBoard();
     bool isSolved() const;
     bool checkForDuplicates();
@@ -95,6 +97,8 @@ public:
     void stopFlashing();
     void startFlashing();
     void markFlashPossibilitiesAsChanged();
+
+    void doSetDataUndoCommand(const QModelIndex &index, const QVariant &oldValue, const QVariant &newValue);
 
     virtual QVariant data(const QModelIndex &index, int role = Qt::DisplayRole) const override;
     virtual Qt::ItemFlags flags(const QModelIndex &index) const override;
@@ -115,6 +119,21 @@ private:
         CellGroupIterator(CellGroupIteratorDirection direction, int row, int col);
         bool atEnd() const;
         bool next();
+    };
+
+    class SetDataUndoCommand : public QUndoCommand
+    {
+    public:
+        SetDataUndoCommand(BoardModel *board, const QModelIndex &index, const QVariant &oldValue, const QVariant &newValue);
+
+    private:
+        BoardModel *board;
+        QModelIndex index;
+        QVariant oldValue, newValue;
+
+    protected:
+        virtual void redo() override;
+        virtual void undo() override;
     };
 
     bool possibilities[9][9][10];
@@ -152,7 +171,7 @@ signals:
     void endFlashing();
 
 public slots:
-    void modelDataEdited();
+    void modelDataEdited(const QModelIndex &index, int num);
 };
 
 
@@ -186,7 +205,7 @@ private:
     BoardCellDelegate *cellDelegate;
 
 signals:
-    void modelDataEdited(const QModelIndex &index) const;
+    void modelDataEdited(const QModelIndex &index, int num) const;
 
 public slots:
     void modelBeginFlashing();
@@ -220,6 +239,6 @@ private:
     bool isNumToBeFlashed(int num, const QModelIndex &index, const QList<BoardModel::FlashPossibilities> &fps) const;
 
 signals:
-    void modelDataEdited(const QModelIndex &index) const;
+    void modelDataEdited(const QModelIndex &index, int num) const;
 };
 #endif // MAINWINDOW_H
